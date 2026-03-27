@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FileUpload } from "@/components/file-upload";
-import { parsePaymentFile } from "@/lib/stellar";
+import { parsePaymentFile, getBatchSummary } from "@/lib/stellar";
 import type { ParsedPaymentFile } from "@/lib/stellar/types";
 import {
   Send,
@@ -15,6 +15,7 @@ import {
   BookOpen,
 } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
 
 export default function NewBatchPaymentPage() {
   const [selectedNetwork, setSelectedNetwork] = useState<"testnet" | "mainnet">("testnet");
@@ -22,6 +23,13 @@ export default function NewBatchPaymentPage() {
   const [fileFormat, setFileFormat] = useState<"json" | "csv" | null>(null);
   const [validationResult, setValidationResult] = useState<ParsedPaymentFile | null>(null);
   const [validationError, setValidationError] = useState("");
+  const [summary, setSummary] = useState<{
+    recipientCount: number;
+    validCount: number;
+    invalidCount: number;
+    totalAmount: string;
+    assetBreakdown: Record<string, number>;
+  } | null>(null);
 
   const handleFileSelect = async (selectedFile: File, format: "json" | "csv") => {
     setFile(selectedFile);
@@ -32,19 +40,23 @@ export default function NewBatchPaymentPage() {
       const parsed = parsePaymentFile(content, format);
       setValidationResult(parsed);
       setValidationError("");
+      
+      // Calculate summary using enhanced getBatchSummary
+      const instructions = parsed.rows.map(r => r.instruction);
+      const batchSummary = getBatchSummary(instructions);
+      setSummary(batchSummary);
+      
+      toast.success("File parsed and validated successfully");
     } catch (error) {
+      console.error("Failed to parse file:", error);
       setValidationResult(null);
+      setSummary(null);
       setValidationError(error instanceof Error ? error.message : "Failed to parse payment file");
+      toast.error(error instanceof Error ? error.message : "Failed to parse payment file");
     }
   };
 
-  const totalRecipients = validationResult?.rows.length ?? 0;
-  const validPaymentsCount = validationResult?.validPayments.length ?? 0;
-  const invalidPaymentsCount = validationResult?.invalidCount ?? 0;
-  const estimatedFees = (validPaymentsCount * 0.00001).toFixed(5);
-  const totalPayout = validationResult?.validPayments
-    .reduce((sum, payment) => sum + parseFloat(payment.amount || "0"), 0)
-    .toFixed(2) || "0.00";
+  const estimatedFees = summary ? (summary.validCount * 0.0001).toFixed(4) : "0.0000";
 
   return (
     <div className="space-y-6">
@@ -78,7 +90,7 @@ export default function NewBatchPaymentPage() {
               {file && (
                 <div className="mt-4 text-sm text-slate-400">
                   Selected:
-                  <span className="text-white font-medium">{file.name}</span>
+                  <span className="text-white font-medium"> {file.name}</span>
                   {fileFormat && (
                     <span className="ml-2 text-emerald-500">
                       ({fileFormat.toUpperCase()})
@@ -106,19 +118,19 @@ export default function NewBatchPaymentPage() {
                   <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
                     <p className="text-sm text-slate-400">Rows Parsed</p>
                     <p className="mt-1 text-2xl font-bold text-white">
-                      {totalRecipients}
+                      {summary?.recipientCount || 0}
                     </p>
                   </div>
                   <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-4">
                     <p className="text-sm text-emerald-200">Valid Rows</p>
                     <p className="mt-1 text-2xl font-bold text-emerald-400">
-                      {validPaymentsCount}
+                      {summary?.validCount || 0}
                     </p>
                   </div>
                   <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-4">
                     <p className="text-sm text-red-200">Invalid Rows</p>
                     <p className="mt-1 text-2xl font-bold text-red-400">
-                      {invalidPaymentsCount}
+                      {summary?.invalidCount || 0}
                     </p>
                   </div>
                 </div>
@@ -151,7 +163,7 @@ export default function NewBatchPaymentPage() {
                       <tbody>
                         {validationResult.rows.map((row) => (
                           <tr
-                            key={`\${row.rowNumber}-\${row.instruction.address}-\${row.instruction.amount}`}
+                            key={`${row.rowNumber}-${row.instruction.address}-${row.instruction.amount}`}
                             className="border-t border-slate-800 bg-slate-950/30 text-slate-200"
                           >
                             <td className="px-4 py-3 font-mono text-xs text-slate-400">
@@ -171,14 +183,14 @@ export default function NewBatchPaymentPage() {
                             </td>
                             <td className="px-4 py-3 text-center">
                               <span
-                                className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold \${row.valid
+                                className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${row.valid
                                     ? "bg-emerald-500/15 text-emerald-300"
                                     : "bg-red-500/15 text-red-300"
                                   }`}
                                 title={
                                   row.valid
-                                    ? `Row \${row.rowNumber} is valid`
-                                    : `Row \${row.rowNumber}: \${row.error}`
+                                    ? `Row ${row.rowNumber} is valid`
+                                    : `Row ${row.rowNumber}: ${row.error}`
                                 }
                               >
                                 {row.valid ? "Valid" : "Invalid"}
@@ -186,7 +198,7 @@ export default function NewBatchPaymentPage() {
                             </td>
                             <td className="px-4 py-3 text-xs text-red-300">
                               {row.error
-                                ? `Row \${row.rowNumber}: \${row.error}`
+                                ? `Row ${row.rowNumber}: ${row.error}`
                                 : "No issues"}
                             </td>
                           </tr>
@@ -277,44 +289,45 @@ export default function NewBatchPaymentPage() {
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Total Recipients</span>
                 <span className="text-white font-semibold text-lg">
-                  {totalRecipients}
+                  {summary ? summary.recipientCount : "0"}
                 </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Valid Payments</span>
                 <span className="text-emerald-500 font-semibold text-lg">
-                  {validPaymentsCount}
+                  {summary ? summary.validCount : "0"}
                 </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Invalid Payments</span>
                 <span className="text-red-500 font-semibold text-lg">
-                  {invalidPaymentsCount}
+                  {summary ? summary.invalidCount : "0"}
                 </span>
               </div>
               <div className="border-t border-slate-800 pt-4 mt-4">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-slate-400">Estimated Fees</span>
-                  <span className="text-white font-medium">
-                    {estimatedFees} XLM
-                  </span>
+                  <span className="text-white font-medium">{estimatedFees} XLM</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-400">Total Payout</span>
                   <span className="text-white font-bold text-xl">
-                    {totalPayout} XLM
+                    {summary ? parseFloat(summary.totalAmount).toLocaleString(undefined, { minimumFractionDigits: 2 }) : "0.00"}{" "}
+                    {summary && Object.keys(summary.assetBreakdown).length === 1 
+                      ? Object.keys(summary.assetBreakdown)[0] 
+                      : "XLM"}
                   </span>
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Button
-            disabled={!validationResult || invalidPaymentsCount > 0}
+          <Button 
             className="w-full h-12 bg-emerald-500 hover:bg-emerald-600 text-white text-base font-semibold disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-300"
+            disabled={!summary || summary.validCount === 0 || summary.invalidCount > 0}
           >
             <Send className="w-5 h-5 mr-2" />
-            {invalidPaymentsCount > 0
+            {summary && summary.invalidCount > 0
               ? "Resolve Validation Errors"
               : "Submit Batch Payment"}
           </Button>
