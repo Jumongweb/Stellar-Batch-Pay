@@ -182,7 +182,6 @@ impl BatchVestingContract {
         caller.require_auth();
 
         let current_time = env.ledger().timestamp();
-        let mut total_revoked: i128 = 0;
 
         for i in 0..recipients.len() {
             let recipient = recipients.get(i).unwrap();
@@ -231,21 +230,19 @@ impl BatchVestingContract {
                 env.storage().persistent().set(&key, &remaining);
             }
 
-            total_revoked = total_revoked.checked_add(revoked_amount).unwrap();
-
             let sender = schedule_sender.unwrap();
+            let token_client = token::Client::new(&env, &token);
+            token_client.transfer(
+                &env.current_contract_address(),
+                &sender,
+                &revoked_amount,
+            );
+
             env.events().publish(
                 (Symbol::new(&env, "VestingRevoked"),),
                 (recipient, sender, revoked_amount, unlock_time),
             );
         }
-
-        let token_client = token::Client::new(&env, &token);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &caller,
-            &total_revoked,
-        );
     }
 
     /// Return the contract version string.

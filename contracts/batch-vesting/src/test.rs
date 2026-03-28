@@ -556,7 +556,73 @@ fn test_batch_revoke_by_admin() {
 
     client.batch_revoke(&admin, &recipients, &token.address, &unlock_time);
 
-    assert_eq!(token.balance(&admin), 400);
+    assert_eq!(token.balance(&sender), 1000);
+    assert_eq!(token.balance(&admin), 0);
+    assert_eq!(token.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_batch_revoke_multiple_senders() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, BatchVestingContract);
+    let client = BatchVestingContractClient::new(&env, &contract_id);
+
+    let sender1 = Address::generate(&env);
+    let sender2 = Address::generate(&env);
+    let recipient1 = Address::generate(&env);
+    let recipient2 = Address::generate(&env);
+    let admin = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    
+    token_admin_client.mint(&sender1, &1000);
+    token_admin_client.mint(&sender2, &1000);
+
+    client.set_admin(&admin);
+
+    let unlock_time = 1000;
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 0;
+    });
+
+    // Sender 1 deposits for Recipient 1
+    client.deposit(
+        &sender1,
+        &token.address,
+        &Vec::from_array(&env, [recipient1.clone()]),
+        &Vec::from_array(&env, [100]),
+        &unlock_time,
+    );
+
+    // Sender 2 deposits for Recipient 2
+    client.deposit(
+        &sender2,
+        &token.address,
+        &Vec::from_array(&env, [recipient2.clone()]),
+        &Vec::from_array(&env, [200]),
+        &unlock_time,
+    );
+
+    assert_eq!(token.balance(&sender1), 900);
+    assert_eq!(token.balance(&sender2), 800);
+    assert_eq!(token.balance(&contract_id), 300);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 500;
+    });
+
+    // Admin revokes both in a batch
+    let recipients = Vec::from_array(&env, [recipient1.clone(), recipient2.clone()]);
+    client.batch_revoke(&admin, &recipients, &token.address, &unlock_time);
+
+    // Funds should go back to respective senders
+    assert_eq!(token.balance(&sender1), 1000);
+    assert_eq!(token.balance(&sender2), 1000);
+    assert_eq!(token.balance(&admin), 0);
     assert_eq!(token.balance(&contract_id), 0);
 }
 
